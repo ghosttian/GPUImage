@@ -48,6 +48,8 @@ extern NSString *const kGPUImageColorSwizzlingFragmentShaderString;
 @property(nonatomic, copy) NSArray *metaData;
 @property(nonatomic, assign, getter = isPaused) BOOL paused;
 @property(nonatomic, retain) GPUImageContext *movieWriterContext;
+//采样间隔率，默认为1.0，每次采样到来的frame均被写入；若samplingRate > 1.0，将根据samplingRate进行部分写入
+@property(nonatomic,assign) CGFloat samplingRate;
 
 // Initialization and teardown
 - (id)initWithMovieURL:(NSURL *)newMovieURL size:(CGSize)newSize;

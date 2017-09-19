@@ -9,6 +9,9 @@
 void setColorConversion601( GLfloat conversionMatrix[9] );
 void setColorConversion601FullRange( GLfloat conversionMatrix[9] );
 void setColorConversion709( GLfloat conversionMatrix[9] );
+extern NSString *const kGPUImageYUVVideoRangeConversionForRGFragmentShaderString;
+extern NSString *const kGPUImageYUVFullRangeConversionForLAFragmentShaderString;
+extern NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString;
 
 
 //Delegate Protocal for Face Detection.
@@ -75,6 +78,8 @@ void setColorConversion709( GLfloat conversionMatrix[9] );
 @property(readwrite, nonatomic) BOOL horizontallyMirrorFrontFacingCamera, horizontallyMirrorRearFacingCamera;
 
 @property(nonatomic, assign) id<GPUImageVideoCameraDelegate> delegate;
+
+@property(nonatomic, assign) CMVideoDimensions capturePresetDimensions;
 
 /// @name Initialization and teardown
 

@@ -2,6 +2,13 @@
 #import "GPUImageMovieWriter.h"
 #import "GPUImageFilter.h"
 
+const int32_t kHighFrameRateWidth1920 = 1920;
+const int32_t kHighFrameRateHeight1080 = 1080;
+const int32_t kHighFrameRateWidth1280 = 1280;
+const int32_t kHighFrameRateHeight720 = 720;
+const int32_t kHighFrameRateWidth640 = 640;
+const int32_t kHighFrameRateHeight480 = 480;
+
 void setColorConversion601( GLfloat conversionMatrix[9] )
 {
     kColorConversion601 = conversionMatrix;
@@ -89,6 +96,8 @@ void setColorConversion709( GLfloat conversionMatrix[9] )
     internalRotation = kGPUImageNoRotation;
     captureAsYUV = YES;
     _preferredConversion = kColorConversion709;
+    CMVideoDimensions dimension = {kHighFrameRateWidth1280,kHighFrameRateHeight720};
+    _capturePresetDimensions = dimension;
     
 	// Grab the back-facing or front-facing camera
     _inputCamera = nil;
@@ -466,11 +475,52 @@ void setColorConversion709( GLfloat conversionMatrix[9] )
 
 - (void)setFrameRate:(int32_t)frameRate;
 {
-	_frameRate = frameRate;
-	
-	if (_frameRate > 0)
-	{
-		if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
+    [self setFrameRate:frameRate ChangeActiveFormat:NO];
+}
+
+- (BOOL)setFrameRate:(int32_t)frameRate ChangeActiveFormat:(BOOL)allow{
+    
+    _frameRate = frameRate;
+    BOOL result = FALSE;
+    
+    if (!allow || frameRate <= 30) {
+        [self setFramerateInterval:frameRate];
+        result = TRUE;
+        NSLog(@"set camera frame rate successfully! frameRate = %d",frameRate);
+    }else{
+        
+        AVCaptureDevice *videoDevice = self.inputCamera;
+        for(AVCaptureDeviceFormat *vFormat in [videoDevice formats] ) {
+            CMFormatDescriptionRef description= vFormat.formatDescription;
+            float maxRate = ((AVFrameRateRange*) [vFormat.videoSupportedFrameRateRanges objectAtIndex:0]).maxFrameRate;
+            CMVideoDimensions dimension = CMVideoFormatDescriptionGetDimensions(description);
+            if (maxRate > frameRate - 1 &&
+                CMFormatDescriptionGetMediaSubType(description)==kCVPixelFormatType_420YpCbCr8BiPlanarFullRange &&
+                dimension.width == self.capturePresetDimensions.width &&
+                dimension.height == self.capturePresetDimensions.height) {
+                if ([videoDevice lockForConfiguration:nil]) {
+                    videoDevice.activeFormat = vFormat;
+                    [videoDevice setActiveVideoMinFrameDuration:CMTimeMake(10, frameRate * 10)];
+                    [videoDevice setActiveVideoMaxFrameDuration:CMTimeMake(10, frameRate * 10)];
+                    [videoDevice unlockForConfiguration];
+                    result = TRUE;
+                    NSLog(@"set camera frame rate successfully! frameRate = %d",frameRate);
+                    break;
+                }
+            }
+        }
+        
+        [self resetBenchmarkAverage];
+    }
+    
+    return result;
+}
+
+- (void)setFramerateInterval:(int32_t)frameRate{
+    
+    if (_frameRate > 0)
+    {
+        if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
             [_inputCamera respondsToSelector:@selector(setActiveVideoMaxFrameDuration:)]) {
             
             NSError *error;
@@ -498,10 +548,10 @@ void setColorConversion709( GLfloat conversionMatrix[9] )
             }
         }
         
-	}
-	else
-	{
-		if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
+    }
+    else
+    {
+        if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
             [_inputCamera respondsToSelector:@selector(setActiveVideoMaxFrameDuration:)]) {
             
             NSError *error;
@@ -888,7 +938,7 @@ void setColorConversion709( GLfloat conversionMatrix[9] )
         CFRetain(sampleBuffer);
         runAsynchronouslyOnVideoProcessingQueue(^{
             //Feature Detection Hook.
-            if (self.delegate)
+            if (self.delegate && [self.delegate respondsToSelector:@selector(willOutputSampleBuffer:)])
             {
                 [self.delegate willOutputSampleBuffer:sampleBuffer];
             }

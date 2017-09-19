@@ -32,6 +32,11 @@
     int imageBufferWidth, imageBufferHeight;
 }
 
+@property (nonatomic, strong) NSOperationQueue *movieQueue;
+@property (assign, atomic) BOOL isCanceled;
+@property(nonatomic, assign)   NSInteger dropFrameCount;
+@property(nonatomic, assign)   NSInteger validFrameCount;
+
 - (void)processAsset;
 
 @end
@@ -147,6 +152,7 @@
     //    [displayLink invalidate]; // remove from all run loops
     //    displayLink = nil;
     //}
+    self.delegate = nil;
 }
 
 #pragma mark -
@@ -160,6 +166,8 @@
 
 - (void)startProcessing
 {
+    self.isCanceled = NO;
+    
     if( self.playerItem ) {
         [self processPlayerItem];
         return;
@@ -284,6 +292,13 @@
     }
     else
     {
+        if (!self.movieQueue) {
+            self.movieQueue = [[NSOperationQueue alloc]init];
+            self.movieQueue.maxConcurrentOperationCount = 1;
+        }
+        [self.movieQueue cancelAllOperations];
+        
+        [self.movieQueue addOperation:[NSBlockOperation blockOperationWithBlock:^{
         while (reader.status == AVAssetReaderStatusReading && (!_shouldRepeat || keepLooping))
         {
                 [weakSelf readNextVideoFrameFromOutput:readerVideoTrackOutput];
@@ -309,6 +324,7 @@
             }
 
         }
+        }]];
     }
 }
 
@@ -360,6 +376,15 @@
 #endif
 }
 
+- (void)setPaused:(BOOL)paused
+{
+    _paused = paused;
+    if (!paused) {
+        previousActualFrameTime = CFAbsoluteTimeGetCurrent();
+    }
+}
+
+
 #if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
 - (void)displayLinkCallback:(CADisplayLink *)sender
 {
@@ -406,7 +431,7 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
         CVPixelBufferRef pixelBuffer = [playerItemOutput copyPixelBufferForItemTime:outputItemTime itemTimeForDisplay:NULL];
         if( pixelBuffer )
             runSynchronouslyOnVideoProcessingQueue(^{
-                [weakSelf processMovieFrame:pixelBuffer withSampleTime:outputItemTime];
+                [weakSelf customProcessMovieFrame:pixelBuffer withSampleTime:outputItemTime];
                 CFRelease(pixelBuffer);
             });
     }
@@ -414,6 +439,17 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
 
 - (BOOL)readNextVideoFrameFromOutput:(AVAssetReaderOutput *)readerVideoTrackOutput;
 {
+    if (_paused) {
+        return NO;
+    }
+    if (self.isCanceled) {
+        [reader cancelReading];
+    }
+    
+    if ([[UIApplication sharedApplication]applicationState] != UIApplicationStateActive) {
+        return NO;
+    }
+    
     if (reader.status == AVAssetReaderStatusReading && ! videoEncodingIsFinished)
     {
         CMSampleBufferRef sampleBufferRef = [readerVideoTrackOutput copyNextSampleBuffer];
@@ -430,16 +466,53 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
                 CGFloat frameTimeDifference = CMTimeGetSeconds(differenceFromLastFrame);
                 CGFloat actualTimeDifference = currentActualTime - previousActualFrameTime;
                 
-                if (frameTimeDifference > actualTimeDifference)
+                if (frameTimeDifference > actualTimeDifference && !CMTIME_IS_INDEFINITE(previousFrameTime))
                 {
-                    usleep(1000000.0 * (frameTimeDifference - actualTimeDifference));
+                    CGFloat diff = (frameTimeDifference - actualTimeDifference);
+                    usleep(1000000.0 * diff);
+                } else if (self.shouldDropFrame && !CMTIME_IS_INDEFINITE(previousFrameTime)) {
+                    
+                    while (frameTimeDifference < actualTimeDifference) {
+                        CMSampleBufferInvalidate(sampleBufferRef);
+                        CFRelease(sampleBufferRef);
+                        sampleBufferRef = NULL;
+                        
+                        self.dropFrameCount ++;
+                        
+                        if (reader.status == AVAssetReaderStatusReading && !self.isCanceled) {
+                            sampleBufferRef = [readerVideoTrackOutput copyNextSampleBuffer];
+                        }
+                        
+                        if (sampleBufferRef) {
+                            currentSampleTime = CMSampleBufferGetOutputPresentationTimeStamp(sampleBufferRef);
+                            differenceFromLastFrame = CMTimeSubtract(currentSampleTime, previousFrameTime);
+                            frameTimeDifference = CMTimeGetSeconds(differenceFromLastFrame);
+                            currentActualTime = CFAbsoluteTimeGetCurrent();
+                            actualTimeDifference = currentActualTime - previousActualFrameTime;
+                        } else {
+                            if (!keepLooping) {
+                                videoEncodingIsFinished = YES;
+                                if( videoEncodingIsFinished && audioEncodingIsFinished )
+                                    [self endProcessing];
+                            }
+                            return NO;
+                        }
+                    }
+                    if (frameTimeDifference > actualTimeDifference && !CMTIME_IS_INDEFINITE(previousFrameTime))
+                    {
+                        CGFloat diff = (frameTimeDifference - actualTimeDifference);
+                        usleep(1000000.0 * diff);
+                    }
+                    NSLog(@"movie dropFrameCount %ld validFrameCount %ld",(long)self.dropFrameCount,(long)self.validFrameCount);
                 }
                 
                 previousFrameTime = currentSampleTime;
                 previousActualFrameTime = CFAbsoluteTimeGetCurrent();
             }
-
-            __unsafe_unretained GPUImageMovie *weakSelf = self;
+            
+            self.validFrameCount ++;
+            
+            __weak GPUImageMovie *weakSelf = self;
             runSynchronouslyOnVideoProcessingQueue(^{
                 [weakSelf processMovieFrame:sampleBufferRef];
                 CMSampleBufferInvalidate(sampleBufferRef);
@@ -469,6 +542,12 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
 
 - (BOOL)readNextAudioSampleFromOutput:(AVAssetReaderOutput *)readerAudioTrackOutput;
 {
+    if (_paused) {
+        return NO;
+    }
+    if ([[UIApplication sharedApplication]applicationState] != UIApplicationStateActive) {
+        return NO;
+    }
     if (reader.status == AVAssetReaderStatusReading && ! audioEncodingIsFinished)
     {
         CMSampleBufferRef audioSampleBufferRef = [readerAudioTrackOutput copyNextSampleBuffer];
@@ -508,7 +587,7 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
     CVImageBufferRef movieFrame = CMSampleBufferGetImageBuffer(movieSampleBuffer);
 
     processingFrameTime = currentSampleTime;
-    [self processMovieFrame:movieFrame withSampleTime:currentSampleTime];
+    [self customProcessMovieFrame:movieFrame withSampleTime:currentSampleTime];
 }
 
 - (float)progress
@@ -529,8 +608,21 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
     }
 }
 
+- (void)customProcessMovieFrame:(CVPixelBufferRef)movieFrame withSampleTime:(CMTime)currentSampleTime
+{
+    if ([self.delegate respondsToSelector:@selector(customProcessMovieFrame:withSampleTime:)]) {
+        [self.delegate customProcessMovieFrame:movieFrame withSampleTime:currentSampleTime];
+    } else {
+        [self processMovieFrame:movieFrame withSampleTime:currentSampleTime];
+    }
+}
+
 - (void)processMovieFrame:(CVPixelBufferRef)movieFrame withSampleTime:(CMTime)currentSampleTime
 {
+    if ([[UIApplication sharedApplication]applicationState] != UIApplicationStateActive) {
+        return;
+    }
+    
     int bufferHeight = (int) CVPixelBufferGetHeight(movieFrame);
     int bufferWidth = (int) CVPixelBufferGetWidth(movieFrame);
 
@@ -800,6 +892,9 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
     if (self.playerItem && (displayLink != nil))
     {
 #if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
+        if (playerItemOutput) {
+            [self.playerItem removeOutput:playerItemOutput];
+        }
         [displayLink invalidate]; // remove from all run loops
         displayLink = nil;
 #else
@@ -816,8 +911,11 @@ static CVReturn renderCallback(CVDisplayLinkRef displayLink,
 
 - (void)cancelProcessing
 {
-    if (reader) {
-        [reader cancelReading];
+    self.isCanceled = YES;
+    if (self.movieQueue.operationCount == 0 && synchronizedMovieWriter == nil) {
+        if (reader) {
+            [reader cancelReading];
+        }
     }
     [self endProcessing];
 }

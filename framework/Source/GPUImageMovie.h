@@ -3,11 +3,16 @@
 #import "GPUImageContext.h"
 #import "GPUImageOutput.h"
 
+
 /** Protocol for getting Movie played callback.
  */
 @protocol GPUImageMovieDelegate <NSObject>
 
 - (void)didCompletePlayingMovie;
+
+//Will call processMovieFrame after rebuild filter chain
+- (void)customProcessMovieFrame:(CVPixelBufferRef)movieFramePixelBuffer withSampleTime:(CMTime)currentSampleTime;
+
 @end
 
 /** Source object for filtering movies
@@ -31,7 +36,7 @@
 @property(readwrite, nonatomic) BOOL shouldRepeat;
 
 /** This specifies the progress of the process on a scale from 0 to 1.0. A value of 0 means the process has not yet begun, A value of 1.0 means the conversaion is complete.
-    This property is not key-value observable.
+ This property is not key-value observable.
  */
 @property(readonly, nonatomic) float progress;
 
@@ -42,6 +47,8 @@
 @property (readonly, nonatomic) AVAssetReader *assetReader;
 @property (readonly, nonatomic) BOOL audioEncodingIsFinished;
 @property (readonly, nonatomic) BOOL videoEncodingIsFinished;
+@property (readwrite, nonatomic) BOOL shouldDropFrame;
+@property (nonatomic, assign) BOOL paused;
 
 /// @name Initialization and teardown
 - (id)initWithAsset:(AVAsset *)asset;
@@ -56,6 +63,7 @@
 - (void)startProcessing;
 - (void)endProcessing;
 - (void)cancelProcessing;
-- (void)processMovieFrame:(CMSampleBufferRef)movieSampleBuffer; 
+- (void)processMovieFrame:(CMSampleBufferRef)movieSampleBuffer;
+- (void)processMovieFrame:(CVPixelBufferRef)movieFrame withSampleTime:(CMTime)currentSampleTime;
 
 @end

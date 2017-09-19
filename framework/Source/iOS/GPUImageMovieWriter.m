@@ -35,6 +35,9 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     BOOL audioEncodingIsFinished, videoEncodingIsFinished;
 
     BOOL isRecording;
+    
+    CGFloat baseAccumulator;
+    CGFloat radioAccumulator;
 }
 
 // Movie recording
@@ -141,6 +144,9 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     });
         
     [self initializeMovieWithOutputSettings:outputSettings];
+    //用于计算
+    [self initAccumulators];
+    _samplingRate = 1.0;
 
     return self;
 }
@@ -278,6 +284,8 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
         }
     });
     isRecording = YES;
+    
+    [self initAccumulators];
 	//    [assetWriter startSessionAtSourceTime:kCMTimeZero];
 }
 
@@ -380,12 +388,15 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
         if (CMTIME_IS_INVALID(startTime))
         {
             runSynchronouslyOnContextQueue(_movieWriterContext, ^{
-                if ((audioInputReadyCallback == NULL) && (assetWriter.status != AVAssetWriterStatusWriting))
-                {
-                    [assetWriter startWriting];
+                //ensure the first frame is video,so [assetWriter startWriting] should be called in -newframe:
+                //                if ((audioInputReadyCallback == NULL) && (assetWriter.status != AVAssetWriterStatusWriting))
+                //                {
+                //                    [assetWriter startWriting];
+                //                }
+                if (assetWriter.status == AVAssetWriterStatusWriting) {
+                    [assetWriter startSessionAtSourceTime:currentSampleTime];
+                    startTime = currentSampleTime;
                 }
-                [assetWriter startSessionAtSourceTime:currentSampleTime];
-                startTime = currentSampleTime;
             });
         }
 
@@ -725,6 +736,12 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     if (offsetTime.value > 0) {
         frameTime = CMTimeSubtract(frameTime, offsetTime);
     }
+  
+  if (![self isNewFrameSouldBeWrittenAccordingToSamplingRate]) {
+        [firstInputFramebuffer unlock];
+        NSLog(@"New frame should not be written according to sample rate!_samplingRate = %f",_samplingRate);
+        return;
+    }
     
     // Drop frames forced by images and other things with no time constants
     // Also, if two consecutive times with the same value are added to the movie, it aborts recording, so I bail on that case
@@ -1011,6 +1028,29 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     free(pInfo);
     
     return sout;
+}
+
+#pragma mark - private
+
+- (void)initAccumulators{
+    baseAccumulator = 0;
+    radioAccumulator = 0;
+}
+
+- (BOOL)isNewFrameSouldBeWrittenAccordingToSamplingRate{
+    if (_samplingRate <= 1.0) {
+        //如果_samplingRate < 1.0 所有new frame都将被正常写入
+        return YES;
+    }else{
+        if (baseAccumulator >= radioAccumulator) {
+            baseAccumulator += 1.0;
+            radioAccumulator += _samplingRate;
+            return YES;
+        }else{
+            baseAccumulator += 1.0;
+            return NO;
+        }
+    }
 }
 
 @end
