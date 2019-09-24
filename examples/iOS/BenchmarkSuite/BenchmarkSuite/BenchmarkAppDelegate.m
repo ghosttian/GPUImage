@@ -13,8 +13,7 @@
 {
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     // Override point for customization after application launch.
-    self.window.backgroundColor = [UIColor yellowColor];
-    
+    self.window.backgroundColor = [UIColor redColor];    
     mainTabBarController = [[UITabBarController alloc] initWithNibName:nil bundle:nil];
     
     imageFilteringBenchmarkController = [[ImageFilteringBenchmarkController alloc] initWithNibName:@"BenchmarkTableViewController" bundle:nil];
