@@ -6,6 +6,7 @@
     UITabBarController *mainTabBarController;
     ImageFilteringBenchmarkController *imageFilteringBenchmarkController;
     VideoFilteringBenchmarkController *videoFilteringBenchmarkController;
+    int i;
 }
 
 @property (strong, nonatomic) UIWindow *window;
